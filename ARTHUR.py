@@ -10,7 +10,7 @@ from google.cloud import speech_v1p1beta1 as speech
 # Configuration Constants
 GOOGLE_CREDENTIALS = "/home/cjh/Documents/AudioTest/just-stock-395413-77035667209a.json"
 LANGUAGE_CODE = "en-US"
-OPENAI_API_KEY = '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'
+OPENAI_API_KEY = 'YOUR_API_KEY'
 
 # Function for Speech Recognition
 def recognize_speech(credentials_path):
