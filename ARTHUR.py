@@ -8,7 +8,7 @@ import openai
 from google.cloud import speech_v1p1beta1 as speech
 
 # Configuration Constants
-GOOGLE_CREDENTIALS = "/home/cjh/Documents/AudioTest/just-stock-395413-77035667209a.json"
+GOOGLE_CREDENTIALS = "/Your/Path/Here/Download.json"
 LANGUAGE_CODE = "en-US"
 OPENAI_API_KEY = 'YOUR_API_KEY'
 
