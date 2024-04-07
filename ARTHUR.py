@@ -4,21 +4,25 @@ import numpy as np
 import struct
 import math
 import pyaudio
-from playsound import playsound
-import pyaudio
 import requests
 import openai
+from openai import OpenAI
 import tempfile
 import datetime
 import time
-from gtts import gTTS 
+import elevenlabs
 from google.cloud import speech_v1p1beta1 as speech
+from pydub import AudioSegment
+from pydub.playback import play
 
 # Configuration Constants
-GOOGLE_CREDENTIALS = "/Your/Path/Here/Download.json"
+GOOGLE_CREDENTIALS = "Your_Directory_Here"
 LANGUAGE_CODE = "en-US"
-OPENAI_API_KEY = 'YOUR_API_KEY'
-f_name_directory = r'/Your/Path/Here'
+ElevenAPIKey = "Your_Key_Here"
+voice_id = "Your_VoiceID_Here"
+OPENAI_API_KEY = 'Your_Key_Here'
+client = OpenAI(api_key=OPENAI_API_KEY)
+f_name_directory = r'Your_Directory_Here'
 
 Threshold = 10
 
@@ -113,20 +117,17 @@ if __name__ == '__main__':
 
     language = 'en'
     
-    # Initialize conversation history as a list
-    conversation_history = []
-
-    # Initialize content history as a list
-    content_history = []
-    
-    #Defining the conversation
+    # Defining the conversation
     conversation = False
     
-    temp_audio_file = None  # Define temp_audio_file outside the if block
+    conversation_history = []
+
+    # Define temp_audio_file outside the if block
+    temp_audio_file = None
 
     while True:
         try:
-            a = Recorder()  # Initialize the Recorder instance outside the loop
+            a = Recorder()
             user_input = a.listen()
             if 'arthur' in user_input.lower():
                 conversation = True
@@ -137,36 +138,20 @@ if __name__ == '__main__':
                     content_history.append({
                         "text": response,
                         "source": "AI",
-                        "timestamp": datetime.datetime.now().strftime("%Y-%m-d %H:%M:%S")
+                        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     })
                     print('==========A.R.T.H.U.R.:==========')
                     print(response)
                     print('====================')
 
                     # Use ElevenLabs API to generate the audio response
-                    api_endpoint = "https://elevenlabs.ai/api/v1/tts"
-                    headers = {
-                        "Authorization": f"Bearer {ElevenAPIKey}",
-                    }
-                    data = {
-                        "text": response,
-                        "language": "en-US",  # Change to the appropriate language code
-                    }
-
-                    response = requests.post(api_endpoint, headers=headers, json=data)
-                    if response.status_code == 200:
-                        # Save the audio response to a temporary file
-                        audio_data = response.content
-                        temp_audio_file = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
-                        temp_audio_file.write(audio_data)
-
-                        # Play the audio response using playsound
-                        playsound(temp_audio_file.name)
-
-                        # Clean up the temporary audio file
-                        os.remove(temp_audio_file.name)
-                    else:
-                        print("Failed to generate audio response with ElevenLabs API")
+                    audio = elevenlabs.generate(
+                    text= response,
+                    voice=voice_id
+                    )
+                
+                    # Play the audio response using elevanlabs
+                    elevenlabs.play(audio)
 
                     conversation = False
 
@@ -182,16 +167,13 @@ if __name__ == '__main__':
                     # Add user input to the conversation history
                     conversation_history.append({"role": "user", "text": user_input})
 
-                    # A.R.T.H.U.R.'s response using GPT-3
-                    response = openai.Completion.create(
-                        engine="text-davinci-003",  # Use a different model
+                    # A.R.T.H.U.R.'s response using GPT-4
+                    response = client.chat.completions.create(
+                        model ="gpt-4",
                         prompt=user_input,
-                        max_tokens=50,
-                        temperature=0.1
+                        max_tokens= 100,
+                        temperature= 0
                     ).choices[0].text.strip()
-
-                    # Add AI response to the conversation history
-                    conversation_history.append({"role": "AI", "text": response})
 
                     # Update content history with relevant information
                     content_history.append({
@@ -204,12 +186,21 @@ if __name__ == '__main__':
                     print(response)
                     print('====================')
 
+                    # Use ElevenLabs API to generate the audio response
+                    elevenlabs.set_api_key(ElevenAPIKey)
+                    audio = elevenlabs.generate(
+                    text= response,
+                    voice=voice_id
+                    )
+                
+                    # Play the audio response using elevanlabs
+                    elevenlabs.play(audio)
+                    
                 user_input = None
                 response = None
                 print('Reset\n')
 
-        
         except KeyboardInterrupt:
             break
 
-    print("Conversation Ended.")
+print("Conversation Ended.")    
