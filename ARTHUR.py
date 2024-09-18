@@ -1,19 +1,15 @@
 import os
-import sounddevice as sd
-import numpy as np
 import struct
 import math
 import pyaudio
-import requests
 import openai
-from openai import OpenAI
-import tempfile
 import datetime
-import time
 import elevenlabs
+import requests
+import schedule
+import time
+from threading import Thread
 from google.cloud import speech_v1p1beta1 as speech
-from pydub import AudioSegment
-from pydub.playback import play
 
 # Configuration Constants
 GOOGLE_CREDENTIALS = "Your_Directory_Here"
@@ -21,21 +17,106 @@ LANGUAGE_CODE = "en-US"
 ElevenAPIKey = "Your_Key_Here"
 voice_id = "Your_VoiceID_Here"
 OPENAI_API_KEY = 'Your_Key_Here'
-client = OpenAI(api_key=OPENAI_API_KEY)
-f_name_directory = r'Your_Directory_Here'
+OPENWEATHER_API_KEY = 'Your_OpenWeather_API_Key'
+client = openai.ChatCompletion(api_key=OPENAI_API_KEY)
 
 Threshold = 10
-
-SHORT_NORMALIZE = (1.0/32768.0)
+SHORT_NORMALIZE = (1.0 / 32768.0)
 chunk = 1024
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
-RATE = 44100  # Increased the sample rate for better audio quality
+RATE = 44100  # Increased sample rate for better audio quality
 swidth = 2
-
 TIMEOUT_LENGTH = 1
 
-# Function for Speech Recognition
+# Conversation states
+class ConversationState:
+    IDLE = 0
+    ACTIVE = 1
+
+conversation_state = ConversationState.IDLE
+
+# Utility function to manage conversation history
+conversation_history = []
+content_history = []
+
+def update_history(role, text):
+    conversation_history.append({
+        "role": role,
+        "text": text,
+        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+
+# Voice Generation using ElevenLabs
+def generate_voice(text, voice_id):
+    elevenlabs.set_api_key(ElevenAPIKey)
+    audio = elevenlabs.generate(
+        text=text,
+        voice=voice_id
+    )
+    elevenlabs.play(audio)
+
+# Task Management - Simple To-Do List
+tasks = []
+
+def add_task(task):
+    tasks.append(task)
+    return f"Task '{task}' added to the list."
+
+def view_tasks():
+    if tasks:
+        return "\n".join([f"{i + 1}. {task}" for i, task in enumerate(tasks)])
+    else:
+        return "Your task list is empty."
+
+def remove_task(index):
+    if 0 <= index < len(tasks):
+        task = tasks.pop(index)
+        return f"Task '{task}' removed from the list."
+    else:
+        return "Invalid task number."
+
+# Weather Updates using OpenWeatherMap API
+def get_weather(city):
+    url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={OPENWEATHER_API_KEY}&units=metric"
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        weather = data["weather"][0]["description"]
+        temperature = data["main"]["temp"]
+        return f"The weather in {city} is currently {weather} with a temperature of {temperature}°C."
+    else:
+        return "Sorry, I couldn't retrieve the weather information."
+
+# Reminder/Scheduling Feature
+reminders = []
+
+def add_reminder(task, reminder_time):
+    schedule.every().day.at(reminder_time).do(execute_reminder, task)
+    reminders.append({"task": task, "time": reminder_time})
+    return f"Reminder set for '{task}' at {reminder_time}."
+
+def execute_reminder(task):
+    print(f"Reminder: {task}")
+    generate_voice(f"Reminder: {task}", voice_id)
+
+def view_reminders():
+    if reminders:
+        return "\n".join([f"{i + 1}. {reminder['task']} at {reminder['time']}" for i, reminder in enumerate(reminders)])
+    else:
+        return "You have no reminders set."
+
+# Thread for running scheduled reminders
+def run_scheduler():
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+# Start the scheduler in a separate thread
+scheduler_thread = Thread(target=run_scheduler)
+scheduler_thread.start()
+
+# Function for Speech Recognition and Audio Processing
 class Recorder:
     @staticmethod
     def rms(frame):
@@ -96,111 +177,89 @@ class Recorder:
 
     def listen(self):
         print('Listening beginning')
-        counter = 1
         while True:
             input = self.stream.read(chunk)
-            rms_val = self.rms(input)
-            if rms_val > Threshold:
+            if self.rms(input) > Threshold:
                 self.record()  # Start recording into the buffer
-                print('Done with recording', counter)
-                counter += 1
                 transcript = self.transcribe()
                 if transcript:
                     return transcript  # Return the transcribed text
 
-if __name__ == '__main__':
-    # Main Chat Loop
-    openai.api_key = OPENAI_API_KEY
+# Command Handling
+def handle_command(user_input):
+    global conversation_state
 
+    if 'goodbye' in user_input.lower():
+        response = "Hope you have a great day. Goodbye"
+        update_history("AI", response)
+        generate_voice(response, voice_id)
+        conversation_state = ConversationState.IDLE
+        return
+
+    elif 'add task' in user_input.lower():
+        task = user_input.replace("add task", "").strip()
+        response = add_task(task)
+        update_history("AI", response)
+
+    elif 'view tasks' in user_input.lower():
+        response = view_tasks()
+        update_history("AI", response)
+
+    elif 'remove task' in user_input.lower():
+        try:
+            index = int(user_input.replace("remove task", "").strip()) - 1
+            response = remove_task(index)
+        except ValueError:
+            response = "Please specify a valid task number."
+        update_history("AI", response)
+
+    elif 'weather' in user_input.lower():
+        city = user_input.replace("weather in", "").strip()
+        response = get_weather(city)
+        update_history("AI", response)
+
+    elif 'set reminder' in user_input.lower():
+        try:
+            parts = user_input.split("at")
+            task = parts[0].replace("set reminder", "").strip()
+            reminder_time = parts[1].strip()
+            response = add_reminder(task, reminder_time)
+        except IndexError:
+            response = "Please specify a valid time for the reminder."
+        update_history("AI", response)
+
+    elif 'view reminders' in user_input.lower():
+        response = view_reminders()
+        update_history("AI", response)
+
+    else:
+        # Interact with GPT-4 for non-task related responses
+        update_history("user", user_input)
+        response = client.create(
+            model="gpt-4",
+            messages=conversation_history,
+            max_tokens=100,
+            temperature=0
+        ).choices[0].message["content"]
+        update_history("AI", response)
+
+    generate_voice(response, voice_id)
+    print(f"A.R.T.H.U.R.: {response}")
+
+# Main Loop
+if __name__ == '__main__':
     print("You are now in a conversation with A.R.T.H.U.R. (AI).")
     print("Speak into the microphone. Press Ctrl+C to exit.\n")
 
-    language = 'en'
-    
-    # Defining the conversation
-    conversation = False
-    
-    conversation_history = []
-
-    # Define temp_audio_file outside the if block
-    temp_audio_file = None
-
-    while True:
-        try:
-            a = Recorder()
-            user_input = a.listen()
+    try:
+        recorder = Recorder()
+        while True:
+            user_input = recorder.listen()
             if 'arthur' in user_input.lower():
-                conversation = True
-            if conversation:
-                if 'goodbye' in user_input.lower():
-                    response = "Hope you have a great day. Goodbye"
-                    conversation_history.append({"role": "AI", "text": response})
-                    content_history.append({
-                        "text": response,
-                        "source": "AI",
-                        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    })
-                    print('==========A.R.T.H.U.R.:==========')
-                    print(response)
-                    print('====================')
+                conversation_state = ConversationState.ACTIVE
 
-                    # Use ElevenLabs API to generate the audio response
-                    audio = elevenlabs.generate(
-                    text= response,
-                    voice=voice_id
-                    )
-                
-                    # Play the audio response using elevanlabs
-                    elevenlabs.play(audio)
+            if conversation_state == ConversationState.ACTIVE:
+                handle_command(user_input)
 
-                    conversation = False
-
-                # Implement a command to retrieve content history
-                elif user_input.lower() == "show history":
-                    for entry in content_history:
-                        print(f"{entry['timestamp']} - {entry['source']}: {entry['text']}")
-                    break
-                elif user_input:
-                    # Print user input (transcript)
-                    print("User:", user_input)
-
-                    # Add user input to the conversation history
-                    conversation_history.append({"role": "user", "text": user_input})
-
-                    # A.R.T.H.U.R.'s response using GPT-4
-                    response = client.chat.completions.create(
-                        model ="gpt-4",
-                        prompt=user_input,
-                        max_tokens= 100,
-                        temperature= 0
-                    ).choices[0].text.strip()
-
-                    # Update content history with relevant information
-                    content_history.append({
-                        "text": response,
-                        "source": "AI",
-                        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    })
-
-                    print('==========A.R.T.H.U.R.:==========')
-                    print(response)
-                    print('====================')
-
-                    # Use ElevenLabs API to generate the audio response
-                    elevenlabs.set_api_key(ElevenAPIKey)
-                    audio = elevenlabs.generate(
-                    text= response,
-                    voice=voice_id
-                    )
-                
-                    # Play the audio response using elevanlabs
-                    elevenlabs.play(audio)
-                    
-                user_input = None
-                response = None
-                print('Reset\n')
-
-        except KeyboardInterrupt:
-            break
-
-print("Conversation Ended.")    
+    except KeyboardInterrupt:
+        print("Conversation Ended.")
