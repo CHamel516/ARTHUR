@@ -1,0 +1,13 @@
+{
+  "model": "llama3.2:latest",
+  "voice_enabled": true,
+  "default_mode": "gui",
+
+  "elevenlabs_api_key": "",
+  "elevenlabs_voice_id": "",
+
+  "weather_api_key": "",
+  "default_city": "",
+
+  "git_project_paths": []
+}

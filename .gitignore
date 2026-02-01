@@ -1,0 +1,29 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Secrets and credentials
+arthur/data/config.json
+arthur/data/google_credentials.json
+arthur/data/google_token.pickle
+
+# User data
+arthur/data/arthur.db
+arthur/data/*.db
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
