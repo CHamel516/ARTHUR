@@ -4,3 +4,6 @@ from .reminders import ReminderManager
 from .study import StudyTimer
 from .weather import WeatherService
 from .planner import PlanningAssistant
+from .notion import NotionIntegration
+from .git_projects import GitProjectsManager
+from .google_calendar import GoogleCalendarIntegration

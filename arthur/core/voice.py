@@ -1,10 +1,9 @@
 """
 ARTHUR's Voice - Text-to-Speech Output
-Supports both offline (pyttsx3) and high-quality (edge-tts) synthesis
+Supports ElevenLabs (high quality) and pyttsx3 (offline fallback)
 """
 
 import pyttsx3
-import asyncio
 import tempfile
 import os
 import subprocess
@@ -14,27 +13,48 @@ from enum import Enum
 
 class VoiceMode(Enum):
     OFFLINE = "offline"
-    HIGH_QUALITY = "high_quality"
+    ELEVENLABS = "elevenlabs"
 
 
 class Voice:
     """Handles all speech output for ARTHUR"""
 
-    EDGE_VOICE = "en-GB-RyanNeural"
+    # Default ElevenLabs voice ID - can be overridden
+    ELEVENLABS_VOICE_ID = "fTPiybpX1pEUiksgLZnP"
 
-    def __init__(self, mode: VoiceMode = VoiceMode.OFFLINE):
+    def __init__(self, mode: VoiceMode = VoiceMode.ELEVENLABS,
+                 elevenlabs_api_key: Optional[str] = None,
+                 voice_id: Optional[str] = None):
         """
         Initialize text-to-speech
 
         Args:
-            mode: VoiceMode.OFFLINE for pyttsx3, VoiceMode.HIGH_QUALITY for edge-tts
+            mode: VoiceMode.ELEVENLABS for high quality, VoiceMode.OFFLINE for pyttsx3
+            elevenlabs_api_key: API key for ElevenLabs
+            voice_id: Custom ElevenLabs voice ID
         """
         self.mode = mode
+        self.elevenlabs_api_key = elevenlabs_api_key
+        self.voice_id = voice_id or self.ELEVENLABS_VOICE_ID
         self.engine: Optional[pyttsx3.Engine] = None
+        self.elevenlabs_client = None
         self.is_speaking = False
 
-        if mode == VoiceMode.OFFLINE:
+        if mode == VoiceMode.ELEVENLABS and elevenlabs_api_key:
+            self._init_elevenlabs()
+        else:
             self._init_offline_engine()
+
+    def _init_elevenlabs(self):
+        """Initialize ElevenLabs client"""
+        try:
+            from elevenlabs.client import ElevenLabs
+            self.elevenlabs_client = ElevenLabs(api_key=self.elevenlabs_api_key)
+            print("ElevenLabs voice initialized")
+        except Exception as e:
+            print(f"ElevenLabs init failed: {e}, falling back to offline")
+            self._init_offline_engine()
+            self.mode = VoiceMode.OFFLINE
 
     def _init_offline_engine(self):
         """Initialize pyttsx3 for offline TTS"""
@@ -67,17 +87,47 @@ class Voice:
         self.is_speaking = True
 
         try:
-            if self.mode == VoiceMode.HIGH_QUALITY:
-                asyncio.run(self._speak_edge_tts(text))
+            if self.mode == VoiceMode.ELEVENLABS and self.elevenlabs_client:
+                self._speak_elevenlabs(text)
             else:
                 self._speak_offline(text)
         except Exception as e:
             print(f"TTS error: {e}")
-            if self.mode == VoiceMode.HIGH_QUALITY:
+            # Fallback to offline
+            if self.mode == VoiceMode.ELEVENLABS:
                 print("Falling back to offline TTS...")
                 self._speak_offline(text)
 
         self.is_speaking = False
+
+    def _speak_elevenlabs(self, text: str):
+        """Speak using ElevenLabs"""
+        try:
+            from elevenlabs import play
+
+            audio = self.elevenlabs_client.text_to_speech.convert(
+                voice_id=self.voice_id,
+                text=text,
+                model_id="eleven_turbo_v2_5"
+            )
+
+            # Collect the audio bytes
+            audio_bytes = b"".join(audio)
+
+            # Save to temp file and play
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
+                f.write(audio_bytes)
+                temp_path = f.name
+
+            try:
+                subprocess.run(['afplay', temp_path], check=True, capture_output=True)
+            finally:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+
+        except Exception as e:
+            print(f"ElevenLabs error: {e}")
+            raise
 
     def _speak_offline(self, text: str):
         """Speak using pyttsx3 (offline)"""
@@ -87,27 +137,6 @@ class Voice:
         if self.engine:
             self.engine.say(text)
             self.engine.runAndWait()
-
-    async def _speak_edge_tts(self, text: str):
-        """Speak using edge-tts (high quality, requires internet)"""
-        import edge_tts
-
-        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
-            temp_path = f.name
-
-        try:
-            communicate = edge_tts.Communicate(text, self.EDGE_VOICE)
-            await communicate.save(temp_path)
-
-            if os.path.exists(temp_path):
-                subprocess.run(
-                    ['afplay', temp_path],
-                    check=True,
-                    capture_output=True
-                )
-        finally:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
 
     def speak_async(self, text: str):
         """
@@ -129,7 +158,7 @@ class Voice:
 
     def set_mode(self, mode: VoiceMode):
         """
-        Switch between offline and high-quality mode
+        Switch between offline and ElevenLabs mode
 
         Args:
             mode: VoiceMode to switch to
@@ -138,39 +167,10 @@ class Voice:
         if mode == VoiceMode.OFFLINE and self.engine is None:
             self._init_offline_engine()
 
-    def set_rate(self, rate: int):
-        """
-        Set speech rate (words per minute)
-
-        Args:
-            rate: Speech rate (default ~175)
-        """
-        if self.engine:
-            self.engine.setProperty('rate', rate)
-
-    def set_volume(self, volume: float):
-        """
-        Set speech volume
-
-        Args:
-            volume: Volume from 0.0 to 1.0
-        """
-        if self.engine:
-            self.engine.setProperty('volume', max(0.0, min(1.0, volume)))
-
-    def list_voices(self):
-        """List available voices for offline mode"""
-        if self.engine is None:
-            self._init_offline_engine()
-
-        if self.engine:
-            voices = self.engine.getProperty('voices')
-            for voice in voices:
-                print(f"ID: {voice.id}")
-                print(f"Name: {voice.name}")
-                print(f"Languages: {voice.languages}")
-                print("---")
+    def set_voice_id(self, voice_id: str):
+        """Set ElevenLabs voice ID"""
+        self.voice_id = voice_id
 
     def test(self):
         """Test the TTS system"""
-        self.speak("A.R.T.H.U.R. voice system online and operational, sir.")
+        self.speak("A.R.T.H.U.R. voice systems online and operational, sir.")

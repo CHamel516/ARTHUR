@@ -34,10 +34,10 @@ class VoiceInterface:
         self.memory = Memory()
         print("  Memory systems online...")
 
-        self.brain = Brain(model=config.get('model', 'llama3.2:8b'))
+        self.brain = Brain(model=config.get('model', 'llama3.2:latest'))
         print("  Neural networks initialized...")
 
-        self.ears = Ears(model_size=config.get('whisper_model', 'base.en'))
+        self.ears = Ears()
         print("  Audio receptors calibrated...")
 
         voice_mode = VoiceMode.HIGH_QUALITY if config.get('high_quality_voice') else VoiceMode.OFFLINE

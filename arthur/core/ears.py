@@ -1,6 +1,7 @@
 """
-ARTHUR's Ears - Speech Recognition using faster-whisper
-Handles wake word detection and speech-to-text conversion
+ARTHUR's Ears - Speech Recognition
+Uses macOS native speech recognition (offline, fast on Apple Silicon)
+Falls back to SpeechRecognition library if needed
 """
 
 import numpy as np
@@ -8,7 +9,12 @@ import sounddevice as sd
 import queue
 import threading
 from typing import Optional, Callable
-from faster_whisper import WhisperModel
+
+try:
+    import speech_recognition as sr
+    HAS_SPEECH_RECOGNITION = True
+except ImportError:
+    HAS_SPEECH_RECOGNITION = False
 
 
 class Ears:
@@ -16,18 +22,8 @@ class Ears:
 
     WAKE_WORD = "arthur"
 
-    def __init__(self, model_size: str = "base.en", device: str = "auto"):
-        """
-        Initialize speech recognition
-
-        Args:
-            model_size: Whisper model size (tiny.en, base.en, small.en, medium.en)
-                       .en models are English-only but faster
-            device: "auto", "cpu", or "cuda"
-        """
-        self.model_size = model_size
-        self.device = device
-        self.model: Optional[WhisperModel] = None
+    def __init__(self):
+        """Initialize speech recognition"""
         self.audio_queue = queue.Queue()
         self.is_listening = False
         self.is_recording = False
@@ -39,31 +35,21 @@ class Ears:
         self.silence_duration = 1.5
         self.max_recording_duration = 30
 
-        self._load_model()
+        if HAS_SPEECH_RECOGNITION:
+            self.recognizer = sr.Recognizer()
+            self.recognizer.energy_threshold = 300
+            self.recognizer.dynamic_energy_threshold = True
+            self.recognizer.pause_threshold = 0.8
+            self.microphone = sr.Microphone(sample_rate=self.sample_rate)
 
-    def _load_model(self):
-        """Load the Whisper model"""
-        print(f"Loading Whisper model ({self.model_size})...")
-        try:
-            compute_type = "int8" if self.device == "cpu" else "float16"
-            if self.device == "auto":
-                compute_type = "int8"
-
-            self.model = WhisperModel(
-                self.model_size,
-                device="cpu",
-                compute_type=compute_type
-            )
-            print("Whisper model loaded successfully")
-        except Exception as e:
-            print(f"Error loading Whisper model: {e}")
-            raise
-
-    def _audio_callback(self, indata, frames, time, status):
-        """Callback for audio stream"""
-        if status:
-            print(f"Audio status: {status}")
-        self.audio_queue.put(indata.copy())
+            with self.microphone as source:
+                print("Calibrating microphone for ambient noise...")
+                self.recognizer.adjust_for_ambient_noise(source, duration=1)
+                print("Microphone calibrated.")
+        else:
+            print("Warning: SpeechRecognition not available")
+            self.recognizer = None
+            self.microphone = None
 
     def _get_audio_level(self, audio_data: np.ndarray) -> float:
         """Calculate RMS audio level"""
@@ -88,12 +74,17 @@ class Ears:
         self.is_recording = True
         chunk_samples = int(self.sample_rate * self.chunk_duration)
 
+        def audio_callback(indata, frames, time, status):
+            if status:
+                print(f"Audio status: {status}")
+            self.audio_queue.put(indata.copy())
+
         with sd.InputStream(
             samplerate=self.sample_rate,
             channels=self.channels,
             dtype=np.float32,
             blocksize=chunk_samples,
-            callback=self._audio_callback
+            callback=audio_callback
         ):
             while self.is_recording and len(recorded_chunks) < max_chunks:
                 try:
@@ -123,37 +114,38 @@ class Ears:
             return np.concatenate(recorded_chunks).flatten()
         return np.array([])
 
-    def transcribe(self, audio_data: np.ndarray) -> str:
+    def transcribe(self, audio_data: np.ndarray = None) -> str:
         """
-        Transcribe audio data to text
+        Transcribe audio to text using SpeechRecognition
 
         Args:
-            audio_data: Audio as numpy array
+            audio_data: Audio as numpy array (optional, uses mic if None)
 
         Returns:
             Transcribed text
         """
-        if self.model is None:
-            return ""
-
-        if len(audio_data) == 0:
+        if not HAS_SPEECH_RECOGNITION or self.recognizer is None:
             return ""
 
         try:
-            segments, _ = self.model.transcribe(
-                audio_data,
-                beam_size=5,
-                language="en",
-                vad_filter=True,
-                vad_parameters=dict(
-                    min_silence_duration_ms=500,
-                    speech_pad_ms=200
-                )
-            )
+            with self.microphone as source:
+                print("Listening...")
+                audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=15)
 
-            text = " ".join([segment.text for segment in segments]).strip()
-            return text
+            try:
+                text = self.recognizer.recognize_google(audio)
+                return text
+            except sr.UnknownValueError:
+                return ""
+            except sr.RequestError:
+                try:
+                    text = self.recognizer.recognize_sphinx(audio)
+                    return text
+                except:
+                    return ""
 
+        except sr.WaitTimeoutError:
+            return ""
         except Exception as e:
             print(f"Transcription error: {e}")
             return ""
@@ -165,15 +157,10 @@ class Ears:
         Returns:
             Transcribed text from user's speech
         """
-        print("Listening...")
-        audio_data = self.record_audio()
-
-        if len(audio_data) > 0:
-            text = self.transcribe(audio_data)
-            if text:
-                print(f"Heard: {text}")
-            return text
-        return ""
+        text = self.transcribe()
+        if text:
+            print(f"Heard: {text}")
+        return text
 
     def wait_for_wake_word(self, callback: Optional[Callable] = None) -> bool:
         """
@@ -189,16 +176,12 @@ class Ears:
         self.is_listening = True
 
         while self.is_listening:
-            audio_data = self.record_audio(max_duration=5)
-
-            if len(audio_data) > 0:
-                text = self.transcribe(audio_data).lower()
-
-                if self.WAKE_WORD in text:
-                    print("Wake word detected!")
-                    if callback:
-                        callback()
-                    return True
+            text = self.listen_once()
+            if text and self.WAKE_WORD in text.lower():
+                print("Wake word detected!")
+                if callback:
+                    callback()
+                return True
 
         return False
 
@@ -209,15 +192,13 @@ class Ears:
         Returns:
             The command after wake word, or None if not detected
         """
-        audio_data = self.record_audio(max_duration=10)
+        text = self.listen_once()
 
-        if len(audio_data) > 0:
-            text = self.transcribe(audio_data).lower()
-
-            if self.WAKE_WORD in text:
-                wake_idx = text.find(self.WAKE_WORD)
+        if text:
+            lower_text = text.lower()
+            if self.WAKE_WORD in lower_text:
+                wake_idx = lower_text.find(self.WAKE_WORD)
                 command = text[wake_idx + len(self.WAKE_WORD):].strip()
-
                 command = command.lstrip(',').lstrip('.').strip()
 
                 if command:
@@ -238,22 +219,8 @@ class Ears:
         Args:
             duration: How long to sample ambient noise
         """
-        print("Calibrating microphone... Please remain quiet.")
-        chunks = []
-        chunk_samples = int(self.sample_rate * self.chunk_duration)
-
-        with sd.InputStream(
-            samplerate=self.sample_rate,
-            channels=self.channels,
-            dtype=np.float32,
-            blocksize=chunk_samples
-        ) as stream:
-            for _ in range(int(duration / self.chunk_duration)):
-                audio_chunk, _ = stream.read(chunk_samples)
-                chunks.append(audio_chunk)
-
-        if chunks:
-            all_audio = np.concatenate(chunks)
-            ambient_level = self._get_audio_level(all_audio)
-            self.silence_threshold = ambient_level * 2
-            print(f"Silence threshold set to: {self.silence_threshold:.4f}")
+        if HAS_SPEECH_RECOGNITION and self.microphone:
+            print("Calibrating microphone... Please remain quiet.")
+            with self.microphone as source:
+                self.recognizer.adjust_for_ambient_noise(source, duration=duration)
+            print(f"Energy threshold set to: {self.recognizer.energy_threshold}")

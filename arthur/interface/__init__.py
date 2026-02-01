@@ -1,2 +1,2 @@
-from .voice_mode import VoiceMode
-from .gui_mode import GUIMode
+from .voice_mode import VoiceInterface
+from .gui_mode import GUIInterface

@@ -24,13 +24,15 @@ CONFIG_FILE = Path(__file__).parent / "data" / "config.json"
 def load_config() -> dict:
     """Load configuration from file"""
     default_config = {
-        'model': 'llama3.2:8b',
-        'whisper_model': 'base.en',
+        'model': 'llama3.2:latest',
         'high_quality_voice': False,
         'voice_enabled': True,
         'weather_api_key': '',
         'default_city': '',
-        'default_mode': 'gui'
+        'default_mode': 'gui',
+        'notion_api_key': '',
+        'notion_calendar_db': '',
+        'git_project_paths': []
     }
 
     if CONFIG_FILE.exists():
@@ -102,6 +104,28 @@ def run_config_wizard():
     if mode in ['voice', 'gui']:
         config['default_mode'] = mode
 
+    print("\n[7] Notion Integration (optional)")
+    print(f"    Current API Key: {'Set' if config.get('notion_api_key') else 'Not set'}")
+    print("    Get your API key at: notion.so/my-integrations")
+    notion_key = input("    Enter Notion API key (or press Enter to skip): ").strip()
+    if notion_key:
+        config['notion_api_key'] = notion_key
+
+    if config.get('notion_api_key'):
+        print(f"    Current Calendar DB: {config.get('notion_calendar_db', 'Not set')}")
+        print("    Find your database ID in the Notion page URL")
+        notion_db = input("    Enter Calendar Database ID (or press Enter to skip): ").strip()
+        if notion_db:
+            config['notion_calendar_db'] = notion_db
+
+    print("\n[8] Git Project Paths")
+    current_paths = config.get('git_project_paths', [])
+    print(f"    Current paths: {current_paths if current_paths else 'Auto-detect'}")
+    print("    Add paths to scan for Git repos (comma-separated)")
+    git_paths = input("    Enter paths (or press Enter for auto-detect): ").strip()
+    if git_paths:
+        config['git_project_paths'] = [p.strip() for p in git_paths.split(',')]
+
     save_config(config)
     print("\n" + "=" * 50)
     print("Configuration saved!")
@@ -118,14 +142,10 @@ def check_prerequisites():
         import ollama
         models = ollama.list()
         if not models.get('models'):
-            issues.append("No Ollama models found. Run: ollama pull llama3.2:8b")
-    except:
-        issues.append("Ollama not running. Start it with: ollama serve")
-
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError:
-        issues.append("faster-whisper not installed. Run: pip install faster-whisper")
+            issues.append("No Ollama models found. Run: ollama pull llama3.2:latest")
+    except Exception as e:
+        if 'connection' in str(e).lower() or 'connect' in str(e).lower():
+            issues.append("Ollama not running. Start it with: ollama serve")
 
     try:
         import customtkinter
@@ -136,6 +156,11 @@ def check_prerequisites():
         import pyttsx3
     except ImportError:
         issues.append("pyttsx3 not installed. Run: pip install pyttsx3")
+
+    try:
+        import speech_recognition
+    except ImportError:
+        issues.append("SpeechRecognition not installed. Run: pip install SpeechRecognition")
 
     return issues
 
