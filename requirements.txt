@@ -1,0 +1,11 @@
+ollama
+faster-whisper
+pyttsx3
+edge-tts
+customtkinter
+schedule
+requests
+pyaudio
+numpy
+sounddevice
+asyncio
